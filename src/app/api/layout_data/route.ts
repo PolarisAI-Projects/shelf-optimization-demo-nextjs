@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// このエンドポイントは非推奨です。代わりに /api/layout_data を使用してください。
 export async function POST(request: NextRequest) {
   try {
     // FastAPIサーバーのURLを環境変数から取得（デフォルトはlocalhost:8000）
@@ -8,7 +7,6 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    // 新しいlayout_dataエンドポイントを呼び出すように変更
     const response = await fetch(`${apiUrl}/api/layout_data`, {
       method: "POST",
       headers: {
@@ -25,12 +23,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
 
-    return NextResponse.json({
-      ...data,
-      deprecated: true,
-      message:
-        "このエンドポイントは非推奨です。/api/layout_data を使用してください。",
-    });
+    return NextResponse.json(data);
   } catch (error) {
     console.error("Error fetching layout data:", error);
     return NextResponse.json(
