@@ -1,14 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import japanize_matplotlib
 import os
 import random
-import io
 
 # FastAPIアプリケーションを初期化
 app = FastAPI()
@@ -23,8 +19,6 @@ app.add_middleware(
 )
 
 # --- データ読み込み ---
-# Vercel環境では /var/task/ がカレントディレクトリになることが多いので、
-# スクリプトの場所を基準にパスを指定する
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
 
@@ -53,12 +47,7 @@ except Exception as e:
     df_position_initial = pd.DataFrame()
     df_master = pd.DataFrame()
 
-# --- Streamlitのロジックを関数として再定義 ---
-# calculate_layout_score, optimize_step_for_loop, visualize_store_layout
-# などの関数をここにペーストします。
-# visualize_store_layout は st.pyplot(fig) の代わりに画像を返すように変更します。
 def calculate_layout_score(df_pos, df_master, df_base):
-    # (元のコードと同じ)
     try:
         score = 0
         if df_pos.empty or df_master.empty or df_base.empty: 
@@ -100,8 +89,7 @@ def calculate_layout_score(df_pos, df_master, df_base):
         print(f"calculate_layout_score エラー: {e}")
         return 0
 
-def optimize_step_for_loop(df_pos: pd.DataFrame, df_master: pd.DataFrame, df_base: pd.DataFrame, current_score: float) -> (pd.DataFrame, float):
-    # (元のコードと同じ)
+def optimize_step_for_loop(df_pos: pd.DataFrame, df_master: pd.DataFrame, df_base: pd.DataFrame, current_score: float) -> tuple[pd.DataFrame, float]:
     df_copy = df_pos.copy()
     shelf_counts = df_copy.groupby(['台番号', '棚段番号']).size()
     eligible_shelves = shelf_counts[shelf_counts >= 2].index
@@ -120,72 +108,124 @@ def optimize_step_for_loop(df_pos: pd.DataFrame, df_master: pd.DataFrame, df_bas
     else:
         return df_pos, current_score
 
-def visualize_shelf_for_api(df_position, daiban_id):
-    # API用に特定の台の画像のみを生成する関数
+def get_shelf_layout_data(df_position, daiban_id):
+    """特定の台の棚配置データを計算してJSONで返す"""
     df_merged = pd.merge(df_position, df_master, on='商品コード', how='left')
-    color_map = { 'お茶': 'green', 'コーヒー': 'black', 'コーラ': 'red', '水': 'blue' }
-    df_merged['色'] = df_merged['飲料属性'].map(color_map).fillna('grey')
-
+    
     dai_group = df_merged[df_merged['台番号'] == daiban_id]
     if dai_group.empty:
         return None
 
-    dai_max_width = df_base[df_base['台番号'] == daiban_id]['フェイス数'].iloc[0]
+    # 動的にフェース数を計算
+    dynamic_base_data = calculate_dynamic_base_info(df_position)
+    dai_base_info = next((item for item in dynamic_base_data if item['台番号'] == daiban_id), None)
+    
+    if dai_base_info is None:
+        print(f"Warning: 台番号 {daiban_id} のbase情報が見つかりません")
+        return None
+        
+    dai_max_width = dai_base_info['フェイス数']
     tandans = sorted(dai_group['棚段番号'].unique())
-    num_tandans = len(tandans)
-    fig, axes = plt.subplots(nrows=num_tandans, ncols=1, figsize=(12, 1.8 * num_tandans), squeeze=False)
-
-    # ... (visualize_store_layout の描画ロジックをここに移植) ...
-    # 省略: 元のコードの for ループ部分をほぼそのまま使用
-    for i, tandan in enumerate(tandans):
-        ax = axes[i][0]
+    
+    layout_data = {
+        'daiban_id': int(daiban_id),
+        'max_width': int(dai_max_width),
+        'shelves': []
+    }
+    
+    for tandan in tandans:
         tandan_group = dai_group[dai_group['棚段番号'] == tandan]
-        ax.set_xlim(0, dai_max_width)
+        shelf_data = {
+            'tandan': int(tandan),
+            'items': []
+        }
+        
         current_pos = 0
         for _, row in tandan_group.sort_values('棚位置').iterrows():
-            face_count = row['フェース数']
-            color = row['色']
+            face_count = int(row['フェース数'])
             attribute = row['飲料属性'] if pd.notna(row['飲料属性']) else '不明'
-            rect = patches.Rectangle((current_pos, 0), face_count, 1, linewidth=1.5, edgecolor='black', facecolor=color, alpha=0.8)
-            ax.add_patch(rect)
-            ax.text(current_pos + face_count / 2, 0.5, f"{attribute}\n({face_count}フェイス)", ha='center', va='center', color='white', fontsize=9, weight='bold')
+            
+            item_data = {
+                'start_pos': current_pos,
+                'face_count': face_count,
+                'attribute': attribute,
+                'color': get_color_for_attribute(attribute)
+            }
+            shelf_data['items'].append(item_data)
             current_pos += face_count
-        empty_width = dai_max_width - current_pos
+        
+        # 空きスペースの計算
+        empty_width = int(dai_max_width) - current_pos
         if empty_width > 0:
-            rect_empty = patches.Rectangle((current_pos, 0), empty_width, 1, facecolor='none', edgecolor='gray', linestyle='--', linewidth=1)
-            ax.add_patch(rect_empty)
-            ax.text(current_pos + empty_width / 2, 0.5, "空き", ha='center', va='center', color='gray', fontsize=10)
-        ax.set_ylim(0, 1)
-        ax.set_ylabel(f'棚段 {tandan}', rotation=0, ha='right', va='center', fontsize=12)
-        ax.set_xticks(range(0, dai_max_width + 1))
-        ax.set_yticks([])
-    axes[-1][0].set_xlabel('フェース位置')
-    plt.tight_layout(pad=2.0)
+            shelf_data['empty_space'] = {
+                'start_pos': current_pos,
+                'width': empty_width
+            }
+        
+        layout_data['shelves'].append(shelf_data)
+    
+    return layout_data
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+def get_color_for_attribute(attribute):
+    """飲料属性に応じた色を返す"""
+    color_map = {
+        'お茶': '#15803d',      # 深い緑茶色
+        'コーヒー': '#5d2f0a',   # より黒っぽいコーヒーブラウン
+        '不明': '#9ca3af'       # gray-400
+    }
+    return color_map.get(attribute, '#9ca3af')
+
+def calculate_dynamic_base_info(df_position):
+    """棚位置データから台ごとの動的なフェース数を計算"""
+    dynamic_base_info = []
+    
+    # 台ごとにグループ化
+    for daiban_id in sorted(df_position['台番号'].unique()):
+        dai_group = df_position[df_position['台番号'] == daiban_id]
+        
+        # 台内の各段ごとのフェース数合計を計算
+        max_faces = 0
+        for tandan in dai_group['棚段番号'].unique():
+            tandan_group = dai_group[dai_group['棚段番号'] == tandan]
+            tandan_faces = int(tandan_group['フェース数'].sum())  # intに明示的変換
+            max_faces = max(max_faces, tandan_faces)
+        
+        # 動的なbase_infoを作成（すべての値をPython標準型に変換）
+        dynamic_base_info.append({
+            '台番号': int(daiban_id),
+            'フェイス数': int(max_faces),
+            '台高さ': int(1200),  # デフォルト値
+            '台幅': int(900 + (int(max_faces) * 20)),  # フェース数に基づく推定値
+            '台奥行': int(730),   # デフォルト値
+            '段数': int(len(dai_group['棚段番号'].unique()))
+        })
+    
+    return dynamic_base_info
 
 # --- APIエンドポイント定義 ---
 @app.get("/api/initial_data")
 def get_initial_data():
     """初期データを返す"""
-    initial_score = calculate_layout_score(df_position_initial, df_master, df_base)
+    # 動的にbase_infoを計算
+    dynamic_base_data = calculate_dynamic_base_info(df_position_initial)
+    
+    # 動的base_infoを使用してスコア計算（元のdf_baseの代わりに使用）
+    df_dynamic_base = pd.DataFrame(dynamic_base_data)
+    initial_score = calculate_layout_score(df_position_initial, df_master, df_dynamic_base)
     
     # NaN値を適切に処理
     position_data = df_position_initial.fillna(0).to_dict('records')
-    base_data = df_base.fillna(0).to_dict('records')
     
     # scoreがNaNの場合は0にする
     if pd.isna(initial_score) or np.isnan(initial_score):
         initial_score = 0
     
+    print(f"動的に計算されたbase_info: {dynamic_base_data}")
+    
     return JSONResponse({
         "position": position_data,
         "score": float(initial_score),
-        "base_info": base_data
+        "base_info": dynamic_base_data
     })
 
 @app.post("/api/optimize")
@@ -194,10 +234,14 @@ async def optimize(request: dict):
     df_pos = pd.DataFrame(request['position'])
     iterations = request['iterations']
 
-    current_score = calculate_layout_score(df_pos, df_master, df_base)
+    # 動的base_infoを計算
+    dynamic_base_data = calculate_dynamic_base_info(df_pos)
+    df_dynamic_base = pd.DataFrame(dynamic_base_data)
+    
+    current_score = calculate_layout_score(df_pos, df_master, df_dynamic_base)
 
     for _ in range(iterations):
-        df_pos, current_score = optimize_step_for_loop(df_pos, df_master, df_base, current_score)
+        df_pos, current_score = optimize_step_for_loop(df_pos, df_master, df_dynamic_base, current_score)
 
     # NaN値を適切に処理
     position_data = df_pos.fillna(0).to_dict('records')
@@ -211,12 +255,14 @@ async def optimize(request: dict):
         "score": float(current_score),
     })
 
-@app.post("/api/visualize")
-async def visualize(request: dict):
-    """現在の棚データから指定された台の画像を生成して返す"""
+@app.post("/api/layout_data")
+async def get_layout_data(request: dict):
+    """現在の棚データから指定された台のレイアウトデータを返す"""
     df_pos = pd.DataFrame(request['position'])
     daiban_id = request['daiban_id']
-    image_buffer = visualize_shelf_for_api(df_pos, daiban_id)
-    if image_buffer:
-        return StreamingResponse(image_buffer, media_type="image/png")
-    return {"error": "Could not generate image"}, 404
+    layout_data = get_shelf_layout_data(df_pos, daiban_id)
+    
+    if layout_data:
+        return JSONResponse(layout_data)
+    else:
+        return JSONResponse({"error": "Could not generate layout data"}, status_code=404)
