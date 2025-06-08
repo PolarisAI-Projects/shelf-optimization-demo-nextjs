@@ -1,10 +1,41 @@
 'use client'; // このコンポーネントがクライアントサイドで動作することを示す
 
 import { useState, useEffect } from 'react';
+import CombinedShelfVisualization from './components/ShelfVisualization';
 
 // データ型を定義
-type Position = { [key: string]: any };
-type BaseInfo = { 台番号: number, [key: string]: any };
+type Position = {
+  商品コード: string;
+  台番号: number;
+  棚段番号: number;
+  棚位置: number;
+  フェース数: number;
+  [key: string]: string | number;
+};
+
+type BaseInfo = { 
+  台番号: number;
+  フェイス数: number;
+  [key: string]: string | number;
+};
+
+interface LayoutData {
+  daiban_id: number;
+  max_width: number;
+  shelves: Array<{
+    tandan: number;
+    items: Array<{
+      start_pos: number;
+      face_count: number;
+      attribute: string;
+      color: string;
+    }>;
+    empty_space?: {
+      start_pos: number;
+      width: number;
+    };
+  }>;
+}
 
 export default function Home() {
   const [positionData, setPositionData] = useState<Position[]>([]);
@@ -12,7 +43,7 @@ export default function Home() {
   const [score, setScore] = useState<number>(0);
   const [iterations, setIterations] = useState<number>(500);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [imageUrl, setImageUrl] = useState<string>(''); // 表示する画像のURLを管理
+  const [allLayoutData, setAllLayoutData] = useState<LayoutData[]>([]);
 
   // 初期データをロードする関数
   const loadInitialData = async () => {
@@ -22,6 +53,10 @@ export default function Home() {
     setPositionData(data.position);
     setScore(data.score);
     setBaseInfo(data.base_info);
+    
+    // 全ての台のレイアウトデータを取得
+    await fetchAllLayoutData(data.position);
+    
     setIsLoading(false);
   };
 
@@ -41,25 +76,48 @@ export default function Home() {
     const data = await res.json();
     setPositionData(data.position);
     setScore(data.score);
+    
+    // 全ての台のレイアウトデータを更新
+    await fetchAllLayoutData(data.position);
+    
     setIsLoading(false);
   };
   
-  // 台を選択して画像を表示する関数
-  const handleVisualize = async (daibanId: number) => {
-    const res = await fetch('/api/visualize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ position: positionData, daiban_id: daibanId }),
-    });
-    if (res.ok) {
-        const imageBlob = await res.blob();
-        // 既存のURLを破棄してメモリリークを防ぐ
-        if (imageUrl) URL.revokeObjectURL(imageUrl);
-        const newImageUrl = URL.createObjectURL(imageBlob);
-        setImageUrl(newImageUrl);
+  // 全ての台のレイアウトデータを取得する関数
+  const fetchAllLayoutData = async (posData: Position[]) => {
+    try {
+      if (baseInfo.length === 0) return;
+      
+      const layoutPromises = baseInfo.map(async (base) => {
+        const res = await fetch('/api/layout_data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ position: posData, daiban_id: base.台番号 }),
+        });
+        
+        if (res.ok) {
+          return await res.json();
+        } else {
+          console.error(`台番号 ${base.台番号} のレイアウトデータの取得に失敗しました`);
+          return null;
+        }
+      });
+      
+      const results = await Promise.all(layoutPromises);
+      const validResults = results.filter(result => result !== null);
+      setAllLayoutData(validResults);
+    } catch (error) {
+      console.error('レイアウトデータの取得中にエラーが発生しました:', error);
+      setAllLayoutData([]);
     }
   };
 
+  // baseInfoが更新されたときに全てのレイアウトデータを取得
+  useEffect(() => {
+    if (baseInfo.length > 0 && positionData.length > 0) {
+      fetchAllLayoutData(positionData);
+    }
+  }, [baseInfo]);
 
   return (
     <main className="container mx-auto p-4 md:p-8 bg-gray-50 min-h-screen">
@@ -82,7 +140,7 @@ export default function Home() {
           disabled={isLoading}
           className="bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
         >
-          {isLoading ? '実行中...' : `${iterations}回 最適化を実行`}
+          {isLoading ? '実行中...' : '最適化を実行'}
         </button>
         <button
           onClick={loadInitialData}
@@ -100,28 +158,9 @@ export default function Home() {
       {/* 可視化エリア */}
       <div>
         <h2 className="text-2xl font-bold text-gray-800 mb-4">現在の棚レイアウト</h2>
-        <div className="mb-4">
-          <p className="font-semibold mb-2">表示する台を選択してください:</p>
-          <div className="flex flex-wrap gap-2">
-            {baseInfo.map((base) => (
-              <button
-                key={base.台番号}
-                onClick={() => handleVisualize(base.台番号)}
-                className="bg-white border border-gray-300 py-2 px-4 rounded-md hover:bg-gray-100"
-              >
-                台番号: {base.台番号}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-lg shadow-inner min-h-[200px] flex items-center justify-center">
-          {imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageUrl} alt="棚レイアウト" className="max-w-full" />
-          ) : (
-            <p className="text-gray-500">上のボタンから表示したい台を選択してください。</p>
-          )}
+        
+        <div className="bg-gray-100 p-4 rounded-lg shadow-inner">
+          <CombinedShelfVisualization allLayoutData={allLayoutData} />
         </div>
       </div>
     </main>
