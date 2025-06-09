@@ -495,69 +495,122 @@ def get_demo_data_endpoint():
 
 @app.post("/api/optimize")
 async def optimize(request: dict):
-    df_pos = pd.DataFrame(request['position'])
+    global df_base, df_shelf, df_position, df_master
     
-    # グローバル変数のローカルコピーを作成して競合状態を防ぐ
+    # データが空の場合、CSVファイルから直接読み込み
+    if df_master.empty:
+        try:
+            SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+            DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
+            
+            base_df = pd.read_csv(os.path.join(DATA_DIR, '台.csv'))
+            shelf_df = pd.read_csv(os.path.join(DATA_DIR, '棚.csv'))
+            position_df = pd.read_csv(os.path.join(DATA_DIR, '棚位置.csv'))
+            master_df = pd.read_csv(os.path.join(DATA_DIR, '商品.csv'))
+            
+            set_global_dataframes(base_df, shelf_df, position_df, master_df)
+            print("CSV データから読み込み完了。")
+        except Exception as e:
+            print(f"CSV データの読み込みエラー: {e}")
+            return JSONResponse({"error": f"データファイルの読み込みに失敗しました: {str(e)}"}, status_code=500)
+    
     if df_master.empty:
         return JSONResponse({"error": "マスターデータが読み込まれていません。"}, status_code=404)
     
-    df_master_local = df_master.copy()
-    
-    # 固定の台情報を使用（フェイス数が変わらないように）
-    base_info = get_fixed_base_info()
-    df_dynamic_base = pd.DataFrame(base_info)
-    
-    df_pos_optimized, current_score = optimize_greedy(df_pos, df_master_local, df_dynamic_base)
+    try:
+        df_pos = pd.DataFrame(request['position'])
+        
+        # グローバル変数のローカルコピーを作成して競合状態を防ぐ
+        df_master_local = df_master.copy()
+        
+        # 固定の台情報を使用（フェイス数が変わらないように）
+        base_info = get_fixed_base_info()
+        df_dynamic_base = pd.DataFrame(base_info)
+        
+        df_pos_optimized, current_score = optimize_greedy(df_pos, df_master_local, df_dynamic_base)
 
-    # JSONシリアライズ対応の変換を適用
-    position_data = convert_to_json_serializable(df_pos_optimized)
+        # JSONシリアライズ対応の変換を適用
+        position_data = convert_to_json_serializable(df_pos_optimized)
+        
+        return JSONResponse({
+            "position": position_data,
+            "score": float(current_score if not pd.isna(current_score) else 0),
+            "swap_steps": [],
+            "total_swaps": 0
+        })
     
-    return JSONResponse({
-        "position": position_data,
-        "score": float(current_score if not pd.isna(current_score) else 0),
-        "swap_steps": [],
-        "total_swaps": 0
-    })
+    except Exception as e:
+        print(f"optimize エラー: {e}")
+        return JSONResponse({"error": f"最適化処理中にエラーが発生しました: {str(e)}"}, status_code=500)
 
 @app.post("/api/layout_data")
 async def get_layout_data(request: dict):
-    df_pos = pd.DataFrame(request['position'])
-    daiban_id = request['daiban_id']
+    global df_base, df_shelf, df_position, df_master
     
-    df_merged = pd.merge(df_pos, df_master, on='商品コード', how='left')
-    dai_group = df_merged[df_merged['台番号'] == daiban_id]
-    if dai_group.empty: return JSONResponse({"error": "Could not generate layout data"}, status_code=404)
-
-    dynamic_base_data = calculate_dynamic_base_info(df_pos)
-    dai_base_info = next((item for item in dynamic_base_data if item['台番号'] == daiban_id), None)
-    if dai_base_info is None: return JSONResponse({"error": "Could not find base info"}, status_code=404)
-        
-    dai_max_width = dai_base_info['フェイス数']
-    layout_data: Dict[str, Any] = {'daiban_id': int(daiban_id), 'max_width': int(dai_max_width), 'shelves': []}
-    
-    for tandan in sorted(dai_group['棚段番号'].unique()):
-        tandan_group = dai_group[dai_group['棚段番号'] == tandan]
-        shelf_data: Dict[str, Any] = {'tandan': int(tandan), 'items': []}
-        
-        current_pos = 0
-        for _, row in tandan_group.sort_values('棚位置').iterrows():
-            face_count = int(row['フェース数'])
-            attribute = row['飲料属性'] if pd.notna(row['飲料属性']) else '不明'
+    # データが空の場合、CSVファイルから直接読み込み
+    if df_master.empty:
+        try:
+            SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+            DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
             
-            items_list: List[Dict[str, Any]] = shelf_data['items']
-            items_list.append({
-                'start_pos': current_pos, 'face_count': face_count,
-                'attribute': attribute, 'color': get_color_for_attribute(attribute)
-            })
-            current_pos += face_count
-        
-        if int(dai_max_width) - current_pos > 0:
-            shelf_data['empty_space'] = {'start_pos': current_pos, 'width': int(dai_max_width) - current_pos}
-        
-        shelves_list: List[Dict[str, Any]] = layout_data['shelves']
-        shelves_list.append(shelf_data)
+            base_df = pd.read_csv(os.path.join(DATA_DIR, '台.csv'))
+            shelf_df = pd.read_csv(os.path.join(DATA_DIR, '棚.csv'))
+            position_df = pd.read_csv(os.path.join(DATA_DIR, '棚位置.csv'))
+            master_df = pd.read_csv(os.path.join(DATA_DIR, '商品.csv'))
+            
+            set_global_dataframes(base_df, shelf_df, position_df, master_df)
+            print("CSV データから読み込み完了。")
+        except Exception as e:
+            print(f"CSV データの読み込みエラー: {e}")
+            return JSONResponse({"error": f"データファイルの読み込みに失敗しました: {str(e)}"}, status_code=500)
     
-    return JSONResponse(layout_data)
+    if df_master.empty:
+        return JSONResponse({"error": "マスターデータが読み込まれていません。"}, status_code=404)
+    
+    try:
+        df_pos = pd.DataFrame(request['position'])
+        daiban_id = request['daiban_id']
+        
+        df_merged = pd.merge(df_pos, df_master, on='商品コード', how='left')
+        dai_group = df_merged[df_merged['台番号'] == daiban_id]
+        if dai_group.empty: 
+            return JSONResponse({"error": "Could not generate layout data"}, status_code=404)
+
+        dynamic_base_data = calculate_dynamic_base_info(df_pos)
+        dai_base_info = next((item for item in dynamic_base_data if item['台番号'] == daiban_id), None)
+        if dai_base_info is None: 
+            return JSONResponse({"error": "Could not find base info"}, status_code=404)
+            
+        dai_max_width = dai_base_info['フェイス数']
+        layout_data: Dict[str, Any] = {'daiban_id': int(daiban_id), 'max_width': int(dai_max_width), 'shelves': []}
+        
+        for tandan in sorted(dai_group['棚段番号'].unique()):
+            tandan_group = dai_group[dai_group['棚段番号'] == tandan]
+            shelf_data: Dict[str, Any] = {'tandan': int(tandan), 'items': []}
+            
+            current_pos = 0
+            for _, row in tandan_group.sort_values('棚位置').iterrows():
+                face_count = int(row['フェース数'])
+                attribute = row['飲料属性'] if pd.notna(row['飲料属性']) else '不明'
+                
+                items_list: List[Dict[str, Any]] = shelf_data['items']
+                items_list.append({
+                    'start_pos': current_pos, 'face_count': face_count,
+                    'attribute': attribute, 'color': get_color_for_attribute(attribute)
+                })
+                current_pos += face_count
+            
+            if int(dai_max_width) - current_pos > 0:
+                shelf_data['empty_space'] = {'start_pos': current_pos, 'width': int(dai_max_width) - current_pos}
+            
+            shelves_list: List[Dict[str, Any]] = layout_data['shelves']
+            shelves_list.append(shelf_data)
+        
+        return JSONResponse(layout_data)
+    
+    except Exception as e:
+        print(f"layout_data エラー: {e}")
+        return JSONResponse({"error": f"レイアウトデータの生成中にエラーが発生しました: {str(e)}"}, status_code=500)
 
 @app.get("/api/download_excel")
 async def download_excel():
