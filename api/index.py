@@ -370,6 +370,25 @@ async def upload_data(file: UploadFile = File(...)):
 @app.get("/api/initial_data")
 def get_initial_data_endpoint():
     """現在のマスターデータから初期レイアウトを生成して返す"""
+    global df_base, df_shelf, df_position, df_master
+    
+    # データが空の場合、CSVファイルから直接読み込み
+    if df_position.empty or df_master.empty:
+        try:
+            SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+            DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
+            
+            base_df = pd.read_csv(os.path.join(DATA_DIR, '台.csv'))
+            shelf_df = pd.read_csv(os.path.join(DATA_DIR, '棚.csv'))
+            position_df = pd.read_csv(os.path.join(DATA_DIR, '棚位置.csv'))
+            master_df = pd.read_csv(os.path.join(DATA_DIR, '商品.csv'))
+            
+            set_global_dataframes(base_df, shelf_df, position_df, master_df)
+            print("CSV データから読み込み完了。")
+        except Exception as e:
+            print(f"CSV データの読み込みエラー: {e}")
+            return JSONResponse({"error": f"データファイルの読み込みに失敗しました: {str(e)}"}, status_code=500)
+    
     if df_position.empty or df_master.empty:
          return JSONResponse({"error": "データが読み込まれていません。"}, status_code=404)
 
@@ -394,6 +413,25 @@ def get_initial_data_endpoint():
 @app.get("/api/demo_data")
 def get_demo_data_endpoint():
     """デモデータを生成しグローバル変数を更新後、そのデータを返す"""
+    global df_base, df_shelf, df_position, df_master
+    
+    # データが空の場合、CSVファイルから直接読み込み
+    if df_master.empty or df_position.empty:
+        try:
+            SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+            DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
+            
+            base_df = pd.read_csv(os.path.join(DATA_DIR, '台.csv'))
+            shelf_df = pd.read_csv(os.path.join(DATA_DIR, '棚.csv'))
+            position_df = pd.read_csv(os.path.join(DATA_DIR, '棚位置.csv'))
+            master_df = pd.read_csv(os.path.join(DATA_DIR, '商品.csv'))
+            
+            set_global_dataframes(base_df, shelf_df, position_df, master_df)
+            print("CSV データから読み込み完了。")
+        except Exception as e:
+            print(f"CSV データの読み込みエラー: {e}")
+            return JSONResponse({"error": f"データファイルの読み込みに失敗しました: {str(e)}"}, status_code=500)
+    
     if df_master.empty or df_position.empty:
         return JSONResponse({"error": "マスターデータまたは棚位置の初期読み込みに失敗"}, status_code=500)
 
