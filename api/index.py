@@ -1,7 +1,7 @@
 # openpyxlのインストールが必要です: pip install openpyxl
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import pandas as pd
 import numpy as np
 import os
@@ -28,15 +28,41 @@ df_shelf = pd.DataFrame()
 df_position = pd.DataFrame()
 df_master = pd.DataFrame()
 
+# 元の台設定を保存（フェイス数固定用）
+original_base_info = []
+
 # --- データ管理関数 ---
 def set_global_dataframes(base, shelf, position, master):
     """グローバルなDataFrameを更新する"""
-    global df_base, df_shelf, df_position, df_master
+    global df_base, df_shelf, df_position, df_master, original_base_info
     df_base = base.copy()
     df_shelf = shelf.copy()
     df_position = position.copy()
     df_master = master.copy()
+    
+    # 元の台情報を保存（フェイス数を固定するため）
+    original_base_info = []
+    for _, row in df_base.iterrows():
+        original_base_info.append({
+            '台番号': int(row['台番号']),
+            'フェイス数': int(row['フェイス数']),
+            '段数': int(row['段数']) if '段数' in row else 2
+        })
+    
     print("グローバルDataFrameが更新されました。")
+    print(f"元の台情報を保存: {original_base_info}")
+
+def convert_to_json_serializable(data):
+    """DataFrameのint64型などをJSON対応の型に変換する"""
+    if isinstance(data, pd.DataFrame):
+        # int64型をint型に変換
+        for col in data.columns:
+            if data[col].dtype == 'int64':
+                data[col] = data[col].astype(int)
+            elif data[col].dtype == 'float64':
+                data[col] = data[col].astype(float)
+        return data.fillna(0).to_dict('records')
+    return data
 
 @app.on_event("startup")
 async def startup_event():
@@ -350,11 +376,14 @@ def get_initial_data_endpoint():
     df_pos_with_faces = df_position.copy()
     df_pos_with_faces['フェース数'].fillna(1, inplace=True); df_pos_with_faces['フェース数'] = df_pos_with_faces['フェース数'].astype(int)
 
-    base_info = calculate_dynamic_base_info(df_pos_with_faces)
+    # 固定の台情報を使用
+    base_info = get_fixed_base_info()
     df_dynamic_base = pd.DataFrame(base_info)
     
     initial_score = calculate_layout_score(df_pos_with_faces, df_master, df_dynamic_base)
-    position_data = df_pos_with_faces.fillna(0).to_dict('records')
+    
+    # JSONシリアライズ対応の変換を適用
+    position_data = convert_to_json_serializable(df_pos_with_faces)
     
     return JSONResponse({
         "position": position_data,
@@ -404,28 +433,24 @@ def get_demo_data_endpoint():
     positions = []
     # 台1の配置
     for i, row in dai1_shelf1_items.iterrows():
-        positions.append({'台番号': 1, '棚段番号': 1, '棚位置': i, '商品コード': row['商品コード'], 'フェース数': face_counts[i]})
+        positions.append({'台番号': int(1), '棚段番号': int(1), '棚位置': int(i), '商品コード': row['商品コード'], 'フェース数': int(face_counts[i])})
     for i, row in dai1_shelf2_items.iterrows():
-        positions.append({'台番号': 1, '棚段番号': 2, '棚位置': i, '商品コード': row['商品コード'], 'フェース数': face_counts[i+4]})
+        positions.append({'台番号': int(1), '棚段番号': int(2), '棚位置': int(i), '商品コード': row['商品コード'], 'フェース数': int(face_counts[i+4])})
     
     # 台2の配置
     for i, row in dai2_shelf1_items.iterrows():
-        positions.append({'台番号': 2, '棚段番号': 1, '棚位置': i, '商品コード': row['商品コード'], 'フェース数': face_counts[i+8]})
+        positions.append({'台番号': int(2), '棚段番号': int(1), '棚位置': int(i), '商品コード': row['商品コード'], 'フェース数': int(face_counts[i+8])})
     for i, row in dai2_shelf2_items.iterrows():
-        positions.append({'台番号': 2, '棚段番号': 2, '棚位置': i, '商品コード': row['商品コード'], 'フェース数': face_counts[i+11]})
+        positions.append({'台番号': int(2), '棚段番号': int(2), '棚位置': int(i), '商品コード': row['商品コード'], 'フェース数': int(face_counts[i+11])})
 
     demo_pos = pd.DataFrame(positions)
     demo_pos = _compact_and_update_df(demo_pos)
 
-    demo_base_info = calculate_dynamic_base_info(demo_pos)
-    demo_base = pd.DataFrame(demo_base_info)
-    
-    # 各台に空きスペースを設けるため、フェイス数を拡張
-    for i, base_row in demo_base.iterrows():
-        demo_base.loc[i, 'フェイス数'] = int(base_row['フェイス数']) + 6  # 6フェース分の空きを追加
-    
+    # 元の台設定を保持（CSVから読み込んだ台設定をそのまま使用）
+    demo_base = df_base.copy()  # 元の台設定を保持
     demo_shelf = demo_pos[['台番号', '棚段番号']].drop_duplicates().reset_index(drop=True)
 
+    # グローバルデータフレームを更新（元の台設定を保持）
     set_global_dataframes(demo_base, demo_shelf, demo_pos, df_master)
     
     return get_initial_data_endpoint()
@@ -440,16 +465,20 @@ async def optimize(request: dict):
     
     df_master_local = df_master.copy()
     
-    dynamic_base_data = calculate_dynamic_base_info(df_pos)
-    df_dynamic_base = pd.DataFrame(dynamic_base_data)
+    # 固定の台情報を使用（フェイス数が変わらないように）
+    base_info = get_fixed_base_info()
+    df_dynamic_base = pd.DataFrame(base_info)
     
-    df_pos, current_score = optimize_greedy(df_pos, df_master_local, df_dynamic_base)
+    df_pos_optimized, current_score = optimize_greedy(df_pos, df_master_local, df_dynamic_base)
 
-    position_data = df_pos.fillna(0).to_dict('records')
+    # JSONシリアライズ対応の変換を適用
+    position_data = convert_to_json_serializable(df_pos_optimized)
     
     return JSONResponse({
         "position": position_data,
         "score": float(current_score if not pd.isna(current_score) else 0),
+        "swap_steps": [],
+        "total_swaps": 0
     })
 
 @app.post("/api/layout_data")
@@ -491,3 +520,81 @@ async def get_layout_data(request: dict):
         shelves_list.append(shelf_data)
     
     return JSONResponse(layout_data)
+
+@app.get("/api/download_excel")
+async def download_excel():
+    """最適化後のデータをExcelファイルとしてダウンロードする"""
+    if df_position.empty or df_master.empty or df_base.empty:
+        return JSONResponse({"error": "ダウンロードするデータがありません。"}, status_code=404)
+    
+    try:
+        # Excelファイルを生成
+        excel_file = create_excel_file(df_position, df_base, df_shelf, df_master, [])
+        
+        # ファイル名を生成（現在時刻を含む）
+        import datetime
+        current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"saiteki_tana_{current_time}.xlsx"  # 英数字のファイル名に変更
+        
+        return StreamingResponse(
+            io.BytesIO(excel_file.read()), 
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; charset=utf-8"
+            }
+        )
+    
+    except Exception as e:
+        print(f"Excel生成エラー: {e}")  # デバッグ用ログ
+        return JSONResponse({"error": f"Excelファイルの生成中にエラーが発生しました: {str(e)}"}, status_code=500)
+
+# --- Excelファイル生成関数 ---
+def create_excel_file(position_df: pd.DataFrame, base_df: pd.DataFrame, shelf_df: pd.DataFrame, master_df: pd.DataFrame, swap_steps: List[Dict]) -> io.BytesIO:
+    """
+    最適化後のデータをExcelファイル形式で生成する
+    """
+    output = io.BytesIO()
+    
+    # ExcelWriterでエンコーディングを明示的に指定
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # 台データ
+        base_df.to_excel(writer, sheet_name='台', index=False)
+        
+        # 棚データ  
+        shelf_df.to_excel(writer, sheet_name='棚', index=False)
+        
+        # 商品データ
+        master_df.to_excel(writer, sheet_name='商品', index=False)
+        
+        # 棚位置データ（最適化後）
+        # 棚位置.csvと同じ形式にする
+        position_output = position_df.copy()
+        # 足りないカラムがあれば追加
+        if '在庫数量' not in position_output.columns:
+            position_output['在庫数量'] = 12  # デフォルト値
+        if '奥行陳列数' not in position_output.columns:
+            position_output['奥行陳列数'] = ''
+        
+        # カラム順序を調整
+        columns_order = ['台番号', '棚段番号', '棚位置', '商品コード', 'フェース数', '在庫数量', '奥行陳列数']
+        position_output = position_output[[col for col in columns_order if col in position_output.columns]]
+        position_output.to_excel(writer, sheet_name='棚位置', index=False)
+    
+    output.seek(0)
+    return output
+
+def get_fixed_base_info():
+    """固定された台情報を返す（フェイス数が変わらないように）"""
+    if original_base_info:
+        return original_base_info
+    else:
+        # フォールバック：現在のdf_baseから生成
+        base_info = []
+        for _, row in df_base.iterrows():
+            base_info.append({
+                '台番号': int(row['台番号']),
+                'フェイス数': int(row['フェイス数']),
+                '段数': int(row['段数']) if '段数' in row else 2
+            })
+        return base_info
