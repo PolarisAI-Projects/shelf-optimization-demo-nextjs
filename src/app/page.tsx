@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import CombinedShelfVisualization from './components/ShelfVisualization';
+import { apiCall } from './utils/api';
 
 // --- データ型定義 ---
 type Position = { [key: string]: string | number };
@@ -66,9 +67,8 @@ export default function Home() {
   const fetchAllLayoutData = async (posData: Position[], bInfo: BaseInfo[]) => {
     try {
       const layoutPromises = bInfo.map(base =>
-        fetch('/api/layout_data', {
+        apiCall('/api/layout_data', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ position: posData, daiban_id: base.台番号 }),
         }).then(res => res.ok ? res.json() : null)
       );
@@ -85,7 +85,7 @@ export default function Home() {
     setMessage('デモデータを読み込んでいます...');
     setIsOptimized(false); // Reset optimization state
     try {
-      const res = await fetch('/api/demo_data');
+      const res = await apiCall('/api/demo_data');
       if (!res.ok) throw new Error('デモデータの読み込みに失敗しました。');
       const data: ApiResponse = await res.json();
       updateState(data);
@@ -107,14 +107,14 @@ export default function Home() {
     formData.append('file', file);
 
     try {
-      const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+      const uploadRes = await apiCall('/api/upload', { method: 'POST', body: formData, headers: {} });
       if (!uploadRes.ok) {
         const err = await uploadRes.json();
         throw new Error(err.error || 'アップロードに失敗しました。');
       }
       
       setMessage('データを初期化しています...');
-      const dataRes = await fetch('/api/initial_data');
+      const dataRes = await apiCall('/api/initial_data');
       if (!dataRes.ok) throw new Error('アップロード後のデータ取得に失敗しました。');
 
       const data: ApiResponse = await dataRes.json();
@@ -134,9 +134,8 @@ export default function Home() {
     setIsLoading(true);
     setMessage('最適化を実行中...');
     try {
-      const res = await fetch('/api/optimize', {
+      const res = await apiCall('/api/optimize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ position: positionData }),
       });
       if (!res.ok) throw new Error('最適化リクエストに失敗しました。');
@@ -159,7 +158,7 @@ export default function Home() {
     setMessage('Excelファイルを生成中...');
     
     try {
-      const response = await fetch('/api/download_excel');
+      const response = await apiCall('/api/download_excel');
       if (!response.ok) throw new Error('ダウンロードに失敗しました。');
       
       const blob = await response.blob();
