@@ -247,18 +247,27 @@ def _compact_and_update_df(df_to_update: pd.DataFrame):
         compacted_df = pd.concat([compacted_df, sorted_shelf])
     return compacted_df
 
-def optimize_greedy(df_pos: pd.DataFrame, df_master_local: pd.DataFrame, df_base_local: pd.DataFrame, max_passes: int = 15) -> tuple[pd.DataFrame, float]:
+def optimize_greedy(df_pos: pd.DataFrame, df_master_local: pd.DataFrame, df_base_local: pd.DataFrame, max_passes: int = 8) -> tuple[pd.DataFrame, float]:
     current_df = df_pos.copy()
     
     current_score = calculate_layout_score(current_df, df_master_local, df_base_local)
+    no_improvement_count = 0  # 改善がない回数をカウント
 
     for pass_num in range(max_passes):
         best_score_in_pass = current_score
         best_df_in_pass = None
         
         item_indices = list(current_df.index)
+        
+        # 計算量削減：項目数が多い場合は探索範囲を制限
+        max_comparisons = 200  # 最大比較回数を制限
+        comparison_count = 0
+        
         for i in range(len(item_indices)):
             for j in range(i + 1, len(item_indices)):
+                comparison_count += 1
+                if comparison_count > max_comparisons:
+                    break
                 idx1, idx2 = item_indices[i], item_indices[j]
                 row1, row2 = current_df.loc[idx1], current_df.loc[idx2]
                 
@@ -316,12 +325,15 @@ def optimize_greedy(df_pos: pd.DataFrame, df_master_local: pd.DataFrame, df_base
                     best_df_in_pass = temp_df
 
         if best_df_in_pass is None: 
-            break
-        
-        current_df = best_df_in_pass
-        current_score = best_score_in_pass
-        
-        print(f"パス {pass_num + 1}: スコア {current_score:.1f}")
+            no_improvement_count += 1
+            if no_improvement_count >= 2:  # 2回連続改善なしで早期終了
+                print(f"早期終了: パス {pass_num + 1} で改善が見られませんでした")
+                break
+        else:
+            no_improvement_count = 0  # 改善があったらカウントリセット
+            current_df = best_df_in_pass
+            current_score = best_score_in_pass
+            print(f"パス {pass_num + 1}: スコア {current_score:.1f}")
 
     return current_df, current_score
 
