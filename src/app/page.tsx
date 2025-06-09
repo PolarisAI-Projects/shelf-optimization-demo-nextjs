@@ -43,12 +43,14 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [allLayoutData, setAllLayoutData] = useState<LayoutData[]>([]);
   const [message, setMessage] = useState<string>('デモデータを読み込むか、ファイルをアップロードしてください。');
+  const [isOptimized, setIsOptimized] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const updateState = (data: ApiResponse) => {
     setPositionData(data.position || []);
     setScore(data.score || 0);
     setBaseInfo(data.base_info || []);
+    setIsOptimized(!!data.position && data.position.length > 0); // データがあれば最適化済み
     if (data.position && data.base_info) {
       fetchAllLayoutData(data.position, data.base_info);
     }
@@ -58,6 +60,7 @@ export default function Home() {
     setMessage(errorMsg);
     setIsLoading(false);
     updateState({}); // Reset state
+    setIsOptimized(false); // Reset optimization state
   };
 
   const fetchAllLayoutData = async (posData: Position[], bInfo: BaseInfo[]) => {
@@ -80,6 +83,7 @@ export default function Home() {
   const handleLoadDemo = async () => {
     setIsLoading(true);
     setMessage('デモデータを読み込んでいます...');
+    setIsOptimized(false); // Reset optimization state
     try {
       const res = await fetch('/api/demo_data');
       if (!res.ok) throw new Error('デモデータの読み込みに失敗しました。');
@@ -98,6 +102,7 @@ export default function Home() {
 
     setIsLoading(true);
     setMessage('ファイルをアップロードしています...');
+    setIsOptimized(false); // Reset optimization state
     const formData = new FormData();
     formData.append('file', file);
 
@@ -137,10 +142,54 @@ export default function Home() {
       if (!res.ok) throw new Error('最適化リクエストに失敗しました。');
       const data: ApiResponse = await res.json();
       updateState({ ...data, base_info: baseInfo }); // Keep original base_info
-      setMessage('最適化が完了しました。');
+      setMessage(`最適化が完了しました。`);
     } catch (error) {
       handleError(error instanceof Error ? error.message : '不明なエラーが発生しました。');
     }
+    setIsLoading(false);
+  };
+
+  const handleDownload = async () => {
+    if (!isOptimized) {
+      setMessage("まず最適化を実行してください。");
+      return;
+    }
+    
+    setIsLoading(true);
+    setMessage('Excelファイルを生成中...');
+    
+    try {
+      const response = await fetch('/api/download_excel');
+      if (!response.ok) throw new Error('ダウンロードに失敗しました。');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      
+      // ファイル名を取得（Content-Dispositionヘッダーから）
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = 'saiteki_tana.xlsx'; // デフォルトファイル名
+      
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename=([^;]+)/);
+        if (filenameMatch) {
+          filename = filenameMatch[1].replace(/"/g, '');
+        }
+      }
+      
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setMessage('ダウンロードが完了しました。');
+    } catch (error) {
+      handleError(error instanceof Error ? error.message : 'ダウンロードに失敗しました。');
+    }
+    
     setIsLoading(false);
   };
 
@@ -149,7 +198,7 @@ export default function Home() {
       <h1 className="text-3xl font-bold text-gray-800 mb-6">棚割り最適化エンジン</h1>
       
       <div className="bg-white p-4 rounded-lg shadow-md mb-8">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
           <div className="flex flex-col gap-2 h-full">
             <h2 className="font-bold text-lg text-gray-800 mb-2">1. データを選択</h2>
             <button onClick={handleLoadDemo} disabled={isLoading} className="bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700 disabled:bg-gray-400 flex-1">
@@ -166,6 +215,15 @@ export default function Home() {
             <div className="flex-1 flex items-center">
               <button onClick={handleOptimize} disabled={isLoading || positionData.length === 0} className="bg-blue-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 w-full">
                 最適化を実行
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col h-full">
+            <h2 className="font-bold text-lg text-gray-800 mb-2">3. 結果をダウンロード</h2>
+            <div className="flex-1 flex items-center">
+              <button onClick={handleDownload} disabled={isLoading || !isOptimized} className="bg-purple-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 w-full">
+                Excelでダウンロード
               </button>
             </div>
           </div>
